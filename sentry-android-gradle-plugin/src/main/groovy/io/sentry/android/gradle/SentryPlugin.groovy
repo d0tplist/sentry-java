@@ -1,6 +1,7 @@
 package io.sentry.android.gradle
 
 import com.android.build.gradle.AppPlugin
+import com.android.build.gradle.LibraryPlugin
 import com.android.build.gradle.api.ApplicationVariant
 import org.apache.commons.compress.utils.IOUtils
 import org.gradle.api.Plugin
@@ -132,34 +133,38 @@ class SentryPlugin implements Plugin<Project> {
      * @return
      */
     static String getDebugMetaPropPath(Project project, ApplicationVariant variant) {
-        return "${project.buildDir}/intermediates/assets/${variant.dirName}/sentry-debug-meta.properties"
+        return "${variant.mergeAssets.outputDir}/sentry-debug-meta.properties"
     }
 
     void apply(Project project) {
-        project.extensions.create("sentry", SentryPluginExtension)
+        SentryPluginExtension extension = project.extensions.create("sentry", SentryPluginExtension)
 
         project.afterEvaluate {
-            if(!project.plugins.hasPlugin(AppPlugin)) {
+            if(!project.plugins.hasPlugin(AppPlugin) && !project.getPlugins().hasPlugin(LibraryPlugin)) {
                 throw new IllegalStateException('Must apply \'com.android.application\' first!')
             }
 
             project.android.applicationVariants.all { ApplicationVariant variant ->
                 variant.outputs.each { variantOutput ->
-                    def manifestPath
-                    try {
-                        // Android Gradle Plugin < 3.0.0
-                        manifestPath = variantOutput.processManifest.manifestOutputFile
-                    } catch (Exception ignored) {
-                        // Android Gradle Plugin >= 3.0.0
-                        manifestPath = new File(
-                                variantOutput.processManifest.manifestOutputDirectory,
-                                "AndroidManifest.xml")
-                        if (!manifestPath.isFile()) {
-                            manifestPath = new File(
-                                    new File(
-                                            variantOutput.processManifest.manifestOutputDirectory,
-                                            variantOutput.dirName),
-                                    "AndroidManifest.xml")
+                    def manifestPath = extension.manifestPath
+                    if (manifestPath == null) {
+                        try {
+                            // Android Gradle Plugin < 3.0.0
+                            manifestPath = variantOutput.processManifest.manifestOutputFile
+                        } catch (Exception ignored) {
+                            // Android Gradle Plugin >= 3.0.0
+                            def outputDir = variantOutput.processManifest.manifestOutputDirectory
+                            // Gradle 4.7 introduced the lazy task API and AGP 3.3+ adopts that,
+                            // so we apparently have a Provider<File> here instead
+                            // TODO: This will let us depend on the configuration of each flavor's
+                            // manifest creation task and their transitive dependencies, which in
+                            // turn prolongs the configuration time accordingly. Evaluate how Gradle's
+                            // new Task Avoidance API can be used instead.
+                            // (https://docs.gradle.org/current/userguide/task_configuration_avoidance.html)
+                            if (!(outputDir instanceof File)) {
+                                outputDir = outputDir.get().asFile
+                            }
+                            manifestPath = new File(outputDir, "AndroidManifest.xml")
                         }
                     }
 
@@ -172,7 +177,7 @@ class SentryPlugin implements Plugin<Project> {
                     }
 
                     // create a task to configure proguard automatically unless the user disabled it.
-                    if (project.sentry.autoProguardConfig) {
+                    if (extension.autoProguardConfig) {
                         def addProguardSettingsTaskName = "addSentryProguardSettingsFor${variant.name.capitalize()}"
                         if (!project.tasks.findByName(addProguardSettingsTaskName)) {
                             SentryProguardConfigTask proguardConfigTask = project.tasks.create(
@@ -199,9 +204,11 @@ class SentryPlugin implements Plugin<Project> {
                         def propName = "sentry.properties"
                         def possibleProps = [
                                 "${project.projectDir}/src/${variantName}/${propName}",
+                                "${project.projectDir}/src/${flavorName}/${propName}",
                                 "${project.projectDir}/src/${variantName}/${flavorName}/${propName}",
                                 "${project.projectDir}/src/${flavorName}/${variantName}/${propName}",
                                 "${project.rootDir.toPath()}/src/${variantName}/${propName}",
+                                "${project.rootDir.toPath()}/src/${flavorName}/${propName}",
                                 "${project.rootDir.toPath()}/src/${variantName}/${flavorName}/${propName}",
                                 "${project.rootDir.toPath()}/src/${flavorName}/${variantName}/${propName}",
                                 "${project.rootDir.toPath()}/${propName}"
@@ -228,7 +235,7 @@ class SentryPlugin implements Plugin<Project> {
                                 mappingFile
                         ]
 
-                        if (!project.sentry.autoUpload) {
+                        if (!extension.autoUpload) {
                             args.push("--no-upload")
                         }
 
