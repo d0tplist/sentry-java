@@ -3,6 +3,7 @@ package io.sentry;
 import io.sentry.event.Event;
 import io.sentry.event.EventBuilder;
 import io.sentry.event.interfaces.ExceptionInterface;
+import io.sentry.util.Predicate;
 import org.slf4j.Logger;
 import org.slf4j.LoggerFactory;
 
@@ -34,6 +35,32 @@ public class SentryUncaughtExceptionHandler implements Thread.UncaughtExceptionH
         this.defaultExceptionHandler = defaultExceptionHandler;
     }
 
+    private Predicate<Throwable> filter;
+
+    public static boolean setExceptionFilter(Predicate<Throwable> filter){
+
+        if(filter == null){
+            return false;
+        }
+
+        Thread.UncaughtExceptionHandler defaultUncaughtExceptionHandler = Thread.getDefaultUncaughtExceptionHandler();
+
+        if(defaultUncaughtExceptionHandler == null){
+            return false;
+        }
+
+        if(defaultUncaughtExceptionHandler instanceof SentryUncaughtExceptionHandler){
+            ((SentryUncaughtExceptionHandler) defaultUncaughtExceptionHandler).setFilter(filter);
+            return true;
+        }
+
+        return false;
+    }
+
+    private void setFilter(Predicate<Throwable> filter){
+        this.filter = filter;
+    }
+
     /**
      * Sends any uncaught exception to Sentry, then passes the exception on to the pre-existing
      * uncaught exception handler.
@@ -44,6 +71,13 @@ public class SentryUncaughtExceptionHandler implements Thread.UncaughtExceptionH
     @Override
     public void uncaughtException(Thread thread, Throwable thrown) {
         if (enabled) {
+
+            if(filter != null){
+                if(!filter.test(thrown)){
+                    return;
+                }
+            }
+
             logger.trace("Uncaught exception received.");
 
             EventBuilder eventBuilder = new EventBuilder()
